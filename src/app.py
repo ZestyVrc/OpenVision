@@ -27,22 +27,21 @@ SOFTWARE.
 
 
 import asyncio as aio
+from io import BytesIO
 import ipaddress
 import json
 import logging
+import multiprocessing as mp
 from pathlib import Path
 import sys
 import traceback
 
-import cv2 as cv
-import numpy as np
 from PIL import Image
 import toga
 import toga.style.pack as tp
 
-from camera import FTCamera
+from camera_pipeline import CameraPipeline, CameraPipelineError
 from camera_server import MjpegCameraServer
-from tracker_control import TrackerController
 
 
 class TestApp(toga.App):
@@ -190,11 +189,13 @@ class TestApp(toga.App):
             app_id="ch.dragondreams.lipcamera.ipserver",
             on_exit=self.on_exit_app,
         )
-        self.ftcamera: FTCamera | None = None
-        self.tracker_controller: TrackerController | None = None
+        self.camera_pipeline = CameraPipeline()
+        self.ftcamera: CameraPipeline | None = None
         self.camera_server = MjpegCameraServer()
         self.preview_active = False
         self._suppress_events = False
+        self._ui_loop: aio.AbstractEventLoop | None = None
+        self._frame_pump_task: aio.Task | None = None
         self.logger = logging.getLogger("evcta.TestApp")
 
     @property
@@ -272,11 +273,12 @@ class TestApp(toga.App):
             self.lab_cam_info.text = self.tr("camera_info_empty")
             return
 
+        info = self.camera_pipeline.camera_info
         self.lab_cam_info.text = self.tr(
             "camera_info",
-            width=self.ftcamera.frame_width,
-            height=self.ftcamera.frame_height,
-            fps=self.ftcamera.frame_fps,
+            width=info.width,
+            height=info.height,
+            fps=info.fps,
         )
 
     def _apply_language(self) -> None:
@@ -394,13 +396,25 @@ class TestApp(toga.App):
     async def _refresh_capture(self) -> None:
         if not self.ftcamera:
             return
+
         capture_required = self.preview_active or self.camera_server.running
         if capture_required:
-            self.ftcamera.callback_frame = self.process_frame
-            self.ftcamera.start_read()
+            try:
+                self.camera_pipeline.start_capture()
+            except CameraPipelineError:
+                self.logger.error("Failed starting isolated capture:\n%s", traceback.format_exc())
+                await self.main_window.error_dialog(
+                    title=self.tr("control_title"),
+                    message=self.tr("stream_control_failed"),
+                )
+                self.preview_active = False
+                self.camera_server.stop()
+                self._set_preview_ui(False)
+                self._set_server_ui()
+                return
+            self._ensure_frame_pump()
         else:
-            self.ftcamera.callback_frame = None
-            await self.ftcamera.stop_read()
+            self.camera_pipeline.stop_capture()
 
     async def start_preview(self) -> None:
         if not self.ftcamera or self.preview_active:
@@ -442,10 +456,10 @@ class TestApp(toga.App):
                 return False
 
         try:
-            self.camera_server.start(bind_ip, port)
+            await aio.to_thread(self.camera_server.start, bind_ip, port)
         except OSError as error:
             self.logger.error("Failed starting MJPEG server:\n%s", traceback.format_exc())
-            self.camera_server.stop()
+            await aio.to_thread(self.camera_server.stop)
             self._set_server_ui()
 
             if getattr(error, "winerror", None) == 10049:
@@ -463,49 +477,9 @@ class TestApp(toga.App):
         return True
 
     async def stop_server(self) -> None:
-        self.camera_server.stop()
+        await aio.to_thread(self.camera_server.stop)
         await self._refresh_capture()
         self._set_server_ui()
-
-    def process_frame(self, data: np.ndarray) -> None:
-        """Rotate and publish a portrait 320x480 frame for preview and MJPEG delivery."""
-        if self.tracker_controller:
-            data = self.tracker_controller.process_frame(data)
-
-        luminance = cv.split(data)[0]
-        upright = cv.rotate(luminance, cv.ROTATE_90_COUNTERCLOCKWISE)
-
-        # The rotated camera frame is 480x320. The original UI displayed it
-        # inside a portrait 320x480 area. Apply the same portrait conversion
-        # before both preview and MJPEG encoding so clients receive vertical video.
-        portrait = cv.resize(
-            upright,
-            (self.STREAM_WIDTH, self.STREAM_HEIGHT),
-            interpolation=cv.INTER_AREA,
-        )
-
-        if self.camera_server.running:
-            ok, encoded = cv.imencode(
-                ".jpg",
-                portrait,
-                [int(cv.IMWRITE_JPEG_QUALITY), 85],
-            )
-            if ok:
-                self.camera_server.update_jpeg_frame(encoded.tobytes())
-
-        if self.preview_active:
-            preview_frame = cv.resize(
-                portrait,
-                (self.PREVIEW_WIDTH, self.PREVIEW_HEIGHT),
-                interpolation=cv.INTER_AREA,
-            )
-            image = Image.fromarray(preview_frame)
-
-            def update_image() -> None:
-                if self.preview_active:
-                    self.view_camera.image = image
-
-            aio.get_event_loop().call_soon(update_image)
 
     async def open_ftcamera(self) -> bool:
         if self.ftcamera:
@@ -514,44 +488,89 @@ class TestApp(toga.App):
 
         self._set_blank_preview()
         try:
-            self.ftcamera = FTCamera(int(self.edit_device.value))
-            self.ftcamera.open()
+            self.btn_preview.enabled = False
+            self.btn_server.enabled = False
+            info = await self.camera_pipeline.open(int(self.edit_device.value))
+            self.ftcamera = self.camera_pipeline
+            self.logger.info(
+                "Isolated camera opened: %sx%s %.1ffps %s %s",
+                info.width,
+                info.height,
+                info.fps,
+                info.format,
+                info.device_name,
+            )
             self._update_camera_info()
             self.btn_preview.enabled = True
+            self._ensure_frame_pump()
         except Exception:
-            self.logger.error("Failed opening camera:\n%s", traceback.format_exc())
+            self.logger.error("Failed opening isolated camera:\n%s", traceback.format_exc())
             await self.close_ftcamera()
             await self.main_window.error_dialog(
                 title=self.tr("open_device_title"),
                 message=self.tr("open_device_failed"),
             )
             return False
+        finally:
+            self.btn_server.enabled = True
 
-        try:
-            if TrackerController.is_supported_camera(self.ftcamera.device):
-                self.tracker_controller = TrackerController(self.ftcamera.device, self.ftcamera.device_index)
-        except Exception:
-            self.logger.error("Camera extension control failed:\n%s", traceback.format_exc())
-            await self.main_window.error_dialog(
-                title=self.tr("control_title"),
-                message=self.tr("extension_control_failed"),
-            )
         return True
 
     async def close_ftcamera(self) -> None:
         self.preview_active = False
         self._set_preview_ui(False)
         if self.ftcamera:
-            self.ftcamera.callback_frame = None
-            await self.ftcamera.stop_read()
-        if self.tracker_controller:
-            self.tracker_controller.dispose()
-            self.tracker_controller = None
-        if self.ftcamera:
-            await self.ftcamera.close()
+            self.camera_pipeline.stop_capture()
+            await aio.to_thread(self.camera_pipeline.close)
             self.ftcamera = None
         self._update_camera_info()
         self.btn_preview.enabled = False
+
+    def _ensure_frame_pump(self) -> None:
+        if self._frame_pump_task and not self._frame_pump_task.done():
+            return
+        self._frame_pump_task = aio.create_task(self._frame_pump_loop())
+
+    async def _frame_pump_loop(self) -> None:
+        while self.ftcamera is not None and self.camera_pipeline.running:
+            self._drain_camera_status()
+            self._drain_camera_frames()
+            await aio.sleep(0.02)
+
+    def _drain_camera_status(self) -> None:
+        for message in self.camera_pipeline.drain_status():
+            kind = message.get("type")
+            if kind == "error":
+                self.logger.error("Camera worker error: %s", message.get("message"))
+            elif kind == "warning":
+                self.logger.warning("Camera worker warning: %s", message.get("message"))
+            else:
+                self.logger.info("Camera worker status: %s", message)
+
+    def _drain_camera_frames(self) -> None:
+        latest_preview: bytes | None = None
+        latest_server: bytes | None = None
+
+        for message in self.camera_pipeline.drain_frames():
+            if message.get("type") != "frame":
+                continue
+            server_jpeg = message.get("server_jpeg")
+            preview_jpeg = message.get("preview_jpeg")
+            if isinstance(server_jpeg, bytes):
+                latest_server = server_jpeg
+            if isinstance(preview_jpeg, bytes):
+                latest_preview = preview_jpeg
+
+        if latest_server is not None and self.camera_server.running:
+            self.camera_server.update_jpeg_frame(latest_server)
+
+        if latest_preview is not None and self.preview_active:
+            try:
+                image = Image.open(BytesIO(latest_preview))
+                image.load()
+                self.view_camera.image = image
+            except Exception:
+                self.logger.debug("Failed updating preview image", exc_info=True)
 
     async def _restore_enabled_camera(self) -> None:
         if not self.chk_enable.value:
@@ -561,6 +580,7 @@ class TestApp(toga.App):
             self._set_enable_switch(False, save=True)
 
     def startup(self) -> None:
+        self._ui_loop = aio.get_event_loop()
         self._remove_file_and_help_commands()
         settings = self._load_settings()
         self.language = str(settings["language"])
@@ -710,4 +730,5 @@ def main() -> toga.App:
 
 
 if __name__ == "__main__":
+    mp.freeze_support()
     main().main_loop()
