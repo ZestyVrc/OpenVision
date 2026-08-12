@@ -31,6 +31,11 @@ import time
 import traceback
 from collections.abc import Callable
 
+try:
+    import comtypes as comt
+except Exception:  # pragma: no cover - comtypes is Windows-only in this app.
+    comt = None
+
 import numpy as np
 import pygrabber.dshow_graph as pgdsg
 
@@ -74,7 +79,7 @@ class FTCamera:
         self._filter_grabber = None
 
         self._task_read: threading.Thread | None = None
-        self._task_process: aio.Task | None = None
+        self._task_process: threading.Thread | None = None
         self._task_read_stop = False
         self._task_lock: threading.Lock | None = None
         self._has_frame = False
@@ -235,6 +240,27 @@ class FTCamera:
             self._filter_video = None
             self._filter_graph = None
 
+
+    @staticmethod
+    def _co_initialize() -> bool:
+        if comt is None:
+            return False
+        try:
+            comt.CoInitialize()
+            return True
+        except Exception:
+            FTCamera._logger.debug("COM initialization failed", exc_info=True)
+            return False
+
+    @staticmethod
+    def _co_uninitialize(initialized: bool) -> None:
+        if not initialized or comt is None:
+            return
+        try:
+            comt.CoUninitialize()
+        except Exception:
+            FTCamera._logger.debug("COM uninitialization failed", exc_info=True)
+
     def start_read(self) -> None:
         """Start preview acquisition. The device must already be enabled/open."""
         if self._task_read or not self._device or not self._filter_graph:
@@ -246,14 +272,21 @@ class FTCamera:
         self._task_read_stop = False
         self._task_lock = threading.Lock()
 
-        self._filter_graph.run()
+        # DirectShow graph startup can block on Windows driver/USB activity.
+        # Keep it off the Toga/asyncio UI thread so pressing Preview or Start
+        # Server does not freeze the window when the driver takes time to run.
         self._task_read = threading.Thread(
             target=self._read_loop,
             name="FTCameraPreview",
             daemon=True,
         )
+        self._task_process = threading.Thread(
+            target=self._process_loop,
+            name="FTCameraProcessor",
+            daemon=True,
+        )
         self._task_read.start()
-        self._task_process = aio.create_task(self._process_loop())
+        self._task_process.start()
 
     async def stop_read(self) -> None:
         """Stop preview acquisition without releasing the enabled camera."""
@@ -261,33 +294,61 @@ class FTCamera:
             return
 
         FTCamera._logger.info("FTCamera.stop_read: stop preview")
-        if self._filter_graph:
-            self._filter_graph.stop()
-
         self._task_read_stop = True
 
+        if self._filter_graph:
+            await aio.to_thread(self._safe_stop_graph)
+
+        if self._task_read:
+            await aio.to_thread(self._task_read.join, 0.8)
+            self._task_read = None
+
         if self._task_process:
-            self._task_process.cancel()
-            try:
-                await self._task_process
-            except aio.CancelledError:
-                pass
+            await aio.to_thread(self._task_process.join, 0.8)
             self._task_process = None
 
-        self._task_read.join(timeout=0.5)
-        self._task_read = None
         self._task_lock = None
         self._read_frame = None
         self._has_frame = False
 
+    def _safe_stop_graph(self) -> None:
+        initialized = self._co_initialize()
+        try:
+            if self._filter_graph:
+                self._filter_graph.stop()
+        except Exception:
+            FTCamera._logger.debug("Error while stopping graph", exc_info=True)
+        finally:
+            self._co_uninitialize(initialized)
+
     def _read_loop(self) -> None:
-        while not self._task_read_stop and self._filter_graph:
+        graph = self._filter_graph
+        if graph is None:
+            return
+
+        initialized = self._co_initialize()
+        try:
             try:
-                self._filter_graph.grab_frame()
+                graph.run()
             except Exception:
-                FTCamera._logger.error("Frame acquisition failed:\n%s", traceback.format_exc())
-                break
-            time.sleep(0.001)
+                FTCamera._logger.error("Frame graph start failed:\n%s", traceback.format_exc())
+                self._task_read_stop = True
+                return
+
+            frame_interval = 1.0 / 60.0
+            while not self._task_read_stop and self._filter_graph is graph:
+                started_at = time.monotonic()
+                try:
+                    graph.grab_frame()
+                except Exception:
+                    FTCamera._logger.error("Frame acquisition failed:\n%s", traceback.format_exc())
+                    self._task_read_stop = True
+                    break
+                elapsed = time.monotonic() - started_at
+                if elapsed < frame_interval:
+                    time.sleep(frame_interval - elapsed)
+        finally:
+            self._co_uninitialize(initialized)
 
     def _async_grabber(self, image: np.ndarray) -> None:
         lock = self._task_lock
@@ -297,8 +358,8 @@ class FTCamera:
             self._read_frame = image
             self._has_frame = True
 
-    async def _process_loop(self) -> None:
-        while True:
+    def _process_loop(self) -> None:
+        while not self._task_read_stop:
             frame = None
             lock = self._task_lock
             if lock is not None:
@@ -310,9 +371,11 @@ class FTCamera:
 
             if frame is not None:
                 if not self._process_frame(frame):
+                    self._task_read_stop = True
                     return
+                time.sleep(0.001)
             else:
-                await aio.sleep(0.001)
+                time.sleep(0.002)
 
     def _process_frame(self, frame: np.ndarray) -> bool:
         if not self.callback_frame or len(frame) == 0:
