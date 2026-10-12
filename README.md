@@ -7,7 +7,7 @@ You can view the Guide here! [FOCUS FT GUIDE BY ZESTYVRC.pdf](https://github.com
 <img width="1319" height="756" alt="the" src="https://github.com/user-attachments/assets/99b74edf-51b8-4d06-96ec-54d605e7c265" />
 
 
------< Credits >-----
+## -----< Credits >-----
 
 SteamVR plug-in, Automation batch script, and Guide created by Zestyvrc
 (I also tried un-vibe coding to the best of my ability, but I'm no professional lol)
@@ -18,7 +18,7 @@ Program created by Kirisamenanoha*
 	- https://x.com/KirisameKOBO
 	- https://x.com/Zestyvrc
 
------< Install guide >-----
+## -----< Install guide >-----
 
 1. Open "~ Set up OpenVisionFT.bat"
 - This will open all SteamVR services needed to install OpenVision
@@ -26,6 +26,6 @@ Program created by Kirisamenanoha*
 - This will force OpenVision to set itself up in SteamVR, SteamVR should give a pop up saying "OpenVr Manifest file imported "root to OpenVision"
 3. You're good to go!
 
------< Uninstall guide >-----
+## -----< Uninstall guide >-----
 
 Because the set up script points SteamVR to the plug in, and sense OpenVision doesn't need localdata, you can simply delete the folder to Uninstall everything!
