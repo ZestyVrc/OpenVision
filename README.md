@@ -29,3 +29,10 @@ Program created by Kirisamenanoha*
 ## -----< Uninstall guide >-----
 
 Because the set up script points SteamVR to the plug in, and sense OpenVision doesn't need localdata, you can simply delete the folder to Uninstall everything!
+
+## -----< ⚠️ AI Disclaimer ⚠️ >-----
+Look, before you kill me, I hate AI just as much as the next person, don't worry. But Kirisamenanoha, The programmer of Lip_Camera_IP_Server, has stated that the software was made with the help of ChatGPT 5.5. Now I'm not about to go recommend some vibe-coded ai slop to you, but I'm also not a programmer myself. I've done my best I can to un-ai this program and remove as many bugs as possible (Thus, OpenVision FT), but I'm just a VR hobbyist, so it's not going to be perfect. That being said, I'm confident enough that this program isn't going to start leaking your RAM or blow up your computer, and I highly recommend you give the program a try!
+
+<img width="256" height="256" alt="Snapshot_20261012111618" src="https://github.com/user-attachments/assets/1ced20c7-b946-4195-b25f-3ad72508096d" />
+
+
