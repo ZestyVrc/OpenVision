@@ -1,6 +1,8 @@
 # OpenVision
 OpenVision FT is a fork of Kirisame-Nanoha's "Lip_Camera_IP_Server" That doesn't just aim to make the Facial Tracker for VIVE Focus Series usable on any vr headset, But also aims to make the SteamVR process as easy as possible
 
+<img width="2560" height="1080" alt="Snapshot_20261012154405" src="https://github.com/user-attachments/assets/e720fc40-2b44-4131-a97e-166910ead1ea" />
+
 You can view the Guide here! [FOCUS FT GUIDE BY ZESTYVRC.pdf](https://github.com/user-attachments/files/33358897/FOCUS.FT.GUIDE.BY.ZESTYVRC.pdf)
 
 
