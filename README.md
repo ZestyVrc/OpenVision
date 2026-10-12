@@ -4,7 +4,8 @@ OpenVision FT is a fork of Kirisame-Nanoha's "Lip_Camera_IP_Server" That doesn't
 You can view the Guide here! [FOCUS FT GUIDE BY ZESTYVRC.pdf](https://github.com/user-attachments/files/33358897/FOCUS.FT.GUIDE.BY.ZESTYVRC.pdf)
 
 
-<img width="1319" height="756" alt="the" src="https://github.com/user-attachments/assets/399eb470-7a79-4afa-a78b-9786e26e699b" />
+<img width="1319" height="756" alt="the" src="https://github.com/user-attachments/assets/99b74edf-51b8-4d06-96ec-54d605e7c265" />
+
 
 -----< Credits >-----
 
