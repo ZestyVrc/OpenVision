@@ -10,15 +10,14 @@ You can view the Guide here! [FOCUS FT GUIDE BY ZESTYVRC.pdf](https://github.com
 
 
 ## -----< Credits >-----
+Program created by Kirisamenanoha* 
+*(With help from ChatGPT5.5)
 
 SteamVR plug-in, Automation batch script, and Guide created by Zestyvrc
 (I also tried un-vibe coding to the best of my ability, but I'm no professional lol)
 
-Program created by Kirisamenanoha* 
-*(With help from ChatGPT5.5)
-
-	- https://x.com/KirisameKOBO
-	- https://x.com/Zestyvrc
+- https://x.com/KirisameKOBO https://x.com/kirisamenanoha
+- https://x.com/Zestyvrc
 
 ## -----< Install guide >-----
 
